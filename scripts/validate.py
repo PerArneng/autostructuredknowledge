@@ -4,11 +4,14 @@
 # ///
 """Validate extracted YAML against its JSON Schema.
 
-Data types (`--type`): each YAML output is named `<base>_<name>.<type>.yaml` and
-governed by `schemas/live/<type>.json`. This validates every `yaml/**/*.<type>.yaml`
-for each requested type. Pass only the type(s) touched in a processing run — a
-schema edit can break existing files of that type, but unrelated types are left
-alone.
+Data types (`--type`): each YAML output is an envelope named
+`<base>_<name>.<type>.yaml`, governed by the combined schema
+`schemas/combined/base_and_<type>.json` (the ASK base envelope fused with the
+live `schemas/live/<type>.json`). The combined schema is refreshed automatically
+before validating, so a schema edit takes effect without a separate step. This
+validates every `yaml/**/*.<type>.yaml` for each requested type. Pass only the
+type(s) touched in a processing run — a schema edit can break existing files of
+that type, but unrelated types are left alone.
 
 Logs (`--logs`): processing logs are named `<base>_<ts>.log.yaml` and governed
 by the ASK-internal schema `schemas/ask/log.json`. This validates every
@@ -22,6 +25,7 @@ Run with:
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -65,6 +69,15 @@ def load_schema(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def refresh_combined(type_name: str, root: Path) -> None:
+    """Regenerate the combined schema for a type if missing or out of date."""
+    subprocess.run(
+        ["uv", "run", "scripts/combine_schema.py", "--type", type_name],
+        cwd=root,
+        check=True,
+    )
+
+
 def validate_files(files: list[Path], schema: dict[str, Any], root: Path) -> tuple[int, int]:
     """Validate each file against the schema; return (checked, failures)."""
     checked = 0
@@ -92,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         dest="types",
         default=[],
         metavar="TYPE",
-        help="Data type to validate (repeatable). Validates yaml/**/*.<type>.yaml vs schemas/live/<type>.json.",
+        help="Data type to validate (repeatable). Validates yaml/**/*.<type>.yaml vs schemas/combined/base_and_<type>.json (auto-refreshed).",
     )
     parser.add_argument(
         "--logs",
@@ -114,7 +127,8 @@ def main() -> None:
     failures = 0
 
     for type_name in args.types:
-        schema = load_schema(schemas_dir / "live" / f"{type_name}.json")
+        refresh_combined(type_name, root)
+        schema = load_schema(schemas_dir / "combined" / f"base_and_{type_name}.json")
         files = sorted((root / "yaml").glob(yaml_glob_for_type(type_name)))
         if not files:
             print(f"(no files for type '{type_name}')")

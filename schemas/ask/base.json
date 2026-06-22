@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ASK Document Envelope",
+  "description": "Common header wrapping every extracted ASK record. Identifying metadata and source provenance live at the top level; the type-specific payload lives under `data`, validated by the live schema for its `type` (see schemas/combined/base_and_<type>.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "type", "created", "source", "data"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable name for this record."
+    },
+    "type": {
+      "type": "string",
+      "description": "The data type of the payload; matches the live schema name (e.g. invoice)."
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$",
+      "description": "When this record was created, ISO 8601 date-time without timezone (YYYY-MM-DDThh:mm:ss, e.g. 2026-06-22T00:08:00). The `date-time` format documents intent; the pattern is what the validator enforces, since jsonschema's default FormatChecker does not check date-time."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileName", "sha256"],
+      "description": "Provenance of the source document this record was extracted from.",
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "description": "Original source file name in inbox/."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Lowercase hex SHA-256 digest of the source file."
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "description": "The type-specific payload. Replaced by the live schema for `type` in the combined schema."
+    }
+  }
+}

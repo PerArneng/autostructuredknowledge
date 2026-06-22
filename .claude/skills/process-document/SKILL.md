@@ -17,9 +17,18 @@ description: >-
 This skill turns one inbox document into structured, schema-validated knowledge.
 The repo is the pipeline: `inbox/` holds raw documents, `markdown/` holds their
 text rendering, `schemas/` holds JSON Schemas (one per data *type*), `yaml/`
-holds the extracted data, and `log/` records what each run changed. Three helper
+holds the extracted data, and `log/` records what each run changed. Helper
 scripts already exist (`scripts/next.py`, `scripts/convert.py`,
-`scripts/validate.py`) — use them; don't reimplement their logic.
+`scripts/sha256.py`, `scripts/combine_schema.py`, `scripts/validate.py`) — use
+them; don't reimplement their logic.
+
+Every extracted record is wrapped in a common **envelope** (a Kubernetes-CRD-like
+header) defined by `schemas/ask/base.json`: top-level `name`, `type`, `created`,
+and `source` (the originating file's name + sha256), with the type-specific
+payload nested under `data`. Validation checks the whole envelope against a
+*combined* schema, `schemas/combined/base_and_<type>.json`, which fuses
+`base.json` with the live `<type>` schema. The combined schemas are generated
+(gitignored) — never hand-edit them; regenerate with `scripts/combine_schema.py`.
 
 **Process exactly one document per invocation.** Picking one file, taking it all
 the way to validated YAML, and logging it keeps each run small and auditable. The
@@ -67,10 +76,13 @@ names.
 ### 4. Resolve the schema for each type
 
 Data-type schemas live flat in `schemas/live/<type>.json`, named by type and
-shared across all documents of that type. `schemas/live/` is the gitignored home
-for these dynamically-authored schemas — keep it distinct from `schemas/ask/`,
-which holds stable hand-authored ASK contracts (e.g. the log schema) you must not
-treat as fair game to edit here. List what exists first:
+shared across all documents of that type. A live schema describes the **`data`
+payload only** — the envelope (`name`, `type`, `created`, `source`) is supplied
+by `schemas/ask/base.json` and you never repeat those fields in a live schema.
+`schemas/live/` is the gitignored home for these dynamically-authored schemas —
+keep it distinct from `schemas/ask/`, which holds stable hand-authored ASK
+contracts (the log schema and the base envelope) you must not treat as fair game
+to edit here. List what exists first:
 
 ```sh
 ls schemas/live/
@@ -95,6 +107,19 @@ optional just to make validation pass. Aim for:
 - `"additionalProperties": false` so unexpected keys are caught — loosen this
   only with a concrete reason.
 
+Whenever you author or extend a live schema, (re)generate its combined schema so
+validation picks up the change:
+
+```sh
+uv run scripts/combine_schema.py --type <type>
+```
+
+This writes `schemas/combined/base_and_<type>.json` (base envelope + your live
+schema). It only rewrites when out of date; `validate.py` also refreshes it
+automatically, but running it here makes the schema change explicit. If the type
+fits an existing live schema unchanged, you can skip this — `validate.py` will
+generate the combined schema on first use.
+
 ### 5. Write the YAML
 
 One YAML file per extracted record, mirroring the inbox structure, named:
@@ -111,12 +136,45 @@ yaml/<mirror-path>/<base>_<name>.<type>.yaml
 
 Example: `yaml/2026/invoices/invoice_acme0042.invoice.yaml`. Multiple extractions
 → multiple files (`..._acme0042.invoice.yaml`, `..._acmecontact.contact.yaml`).
-Fill the YAML with the data read from the Markdown, conforming to the schema.
 
-**Quote dates and date-like values** (`issue_date: "2024-03-25"`). Unquoted, YAML
-parses them into native date objects, which then fail a schema's
-`"type": "string"` / `"format": "date"` check. Keeping them quoted strings keeps
-the YAML aligned with the schema.
+Each file is an **envelope**: the data you read from the Markdown goes under
+`data` (conforming to the live schema); the header fields wrap it:
+
+- `name` — a short human-readable name for the record.
+- `type` — the data type; must equal `<type>` in the file name.
+- `created` — when you created this record, ISO 8601 **without timezone**, quoted:
+  `"YYYY-MM-DDThh:mm:ss"`. Get it from the system clock (`date +%Y-%m-%dT%H:%M:%S`).
+- `source.fileName` — the inbox file's name (e.g. `invoice.pdf`).
+- `source.sha256` — the inbox file's SHA-256, from the helper:
+
+  ```sh
+  uv run scripts/sha256.py --file <inbox-path>
+  ```
+
+- `data` — the type-specific payload.
+
+```yaml
+name: Invoice ACME-0042
+type: invoice
+created: "2026-06-22T14:30:05"
+source:
+  fileName: invoice.pdf
+  sha256: a6e77868557e4df01508992fc0add149c3911f1d718bf09039c1ed688793c1a0
+data:
+  invoice_number: "ACME-0042"
+  issue_date: "2024-03-25"
+  # ... remaining fields from the live schema ...
+```
+
+When one document yields several records (multiple types, or several of one
+type), every file repeats the same `source` block — they all came from the same
+inbox file.
+
+**Quote dates and date-like values** (`issue_date: "2024-03-25"`, `created:
+"2026-06-22T14:30:05"`). Unquoted, YAML parses them into native date/datetime
+objects, which then fail a schema's `"type": "string"` / `"format": "date"` /
+`"pattern"` check. Keeping them quoted strings keeps the YAML aligned with the
+schema.
 
 ### 6. Validate the touched types
 
@@ -127,9 +185,12 @@ its own `--type`:
 uv run scripts/validate.py --type <type> [--type <other-type> ...]
 ```
 
-This checks every `yaml/**/*.<type>.yaml` (so it re-checks *existing* files of
-those types, since a schema edit can break them) and leaves unrelated types
-alone. Resolve any failure by where it comes from:
+For each type this first refreshes the combined schema
+(`schemas/combined/base_and_<type>.json`) from `base.json` + the live schema,
+then checks every `yaml/**/*.<type>.yaml` against it — so both the envelope
+header and the `data` payload are validated. It re-checks *existing* files of
+those types (a schema edit can break them) and leaves unrelated types alone.
+Resolve any failure by where it comes from:
 - **A file you just wrote fails** → fix the YAML; it's a fresh extraction error.
 - **An existing file fails** → judge which side is wrong:
   - the file is genuinely outdated or wrong (e.g. a stale date, a missing field
