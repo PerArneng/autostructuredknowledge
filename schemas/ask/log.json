@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ASK Processing Log",
+  "description": "Record of a single process-document run: the document handled, schema changes made, YAML produced, and the validation outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "timestamp",
+    "document",
+    "types",
+    "schema_changes",
+    "yaml_written",
+    "validation"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the run completed (ISO 8601)."
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inbox", "markdown"],
+      "description": "The document that was processed.",
+      "properties": {
+        "inbox": {
+          "type": "string",
+          "description": "Repo-relative path of the source document in inbox/."
+        },
+        "markdown": {
+          "type": "string",
+          "description": "Repo-relative path of its Markdown rendering."
+        }
+      }
+    },
+    "types": {
+      "type": "array",
+      "description": "Data types extracted from the document.",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "schema_changes": {
+      "type": "array",
+      "description": "Changes made to data-type schemas this run (may be empty).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "action", "path"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The data type whose schema changed."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["created", "extended", "unchanged"],
+            "description": "What happened to the schema."
+          },
+          "path": {
+            "type": "string",
+            "description": "Repo-relative path of the schema file."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Short description of the change."
+          }
+        }
+      }
+    },
+    "yaml_written": {
+      "type": "array",
+      "description": "Repo-relative paths of the YAML files written this run.",
+      "items": { "type": "string" }
+    },
+    "migrations": {
+      "type": "array",
+      "description": "Bulk migrations performed (e.g. temp/ scripts run).",
+      "items": { "type": "string" }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed"],
+      "description": "Outcome of validating the affected types.",
+      "properties": {
+        "passed": {
+          "type": "boolean",
+          "description": "Whether all validation passed."
+        },
+        "types_validated": {
+          "type": "array",
+          "description": "Types passed to validate.py this run.",
+          "items": { "type": "string" }
+        },
+        "details": {
+          "type": "string",
+          "description": "Validator output or notes about failures and fixes."
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-form notes about anything notable in this run."
+    }
+  }
+}
